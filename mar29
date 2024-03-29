@@ -1,0 +1,148 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+
+contract Raffle is ReentrancyGuard   {
+    using SafeMath for uint256;
+
+    address public owner;
+    IERC20 public wSOL;
+    uint256 public ticketPriceInwSOL;
+    uint256 public maxTickets;
+    uint256 public totalTicketsSold;
+    bool public isRaffleOpen;
+    uint256 public endTime;
+    uint256 public winner;
+
+    uint256 public nextRaffleStartTime; // Added variable for next raffle start time
+    uint256 public timeoutDuration = 3 minutes; // Added timeout duration between raffles
+
+    mapping(address => mapping(uint256 => uint256)) public ticketsBought;
+
+    event TicketPurchased(address buyer, uint256 amount);
+    event RaffleOpened(uint256 ticketPriceInSol, uint256 maxTickets);
+    event RaffleClosed(uint256 winner);
+    event WinnerSelected(uint winner, uint prizeAmount);
+
+    constructor(address _wSOL, uint256 _ticketPriceInwSOL, uint256 _maxTickets) {
+        require(_wSOL != address(0), "Invalid wSOL address");
+
+        owner = msg.sender;
+        wSOL = IERC20(_wSOL);
+        ticketPriceInwSOL = _ticketPriceInwSOL;
+        maxTickets = _maxTickets;
+        isRaffleOpen = false;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner can perform this action");
+        _;
+    }
+
+    modifier raffleOpen() {
+        require(isRaffleOpen, "Raffle is not open");
+        _;
+    }
+
+    function startRaffle() external onlyOwner {
+        require(!isRaffleOpen && block.timestamp >= nextRaffleStartTime, "Raffle cannot be started yet or already open");
+        isRaffleOpen = true; // Directly set isRaffleOpen to true
+        endTime = block.timestamp + timeoutDuration; // Set the end time for 3 minutes later
+        totalTicketsSold = 0; // Reset total tickets sold
+        emit RaffleOpened(ticketPriceInwSOL, maxTickets);
+    }
+
+    function openRaffle() external onlyOwner {
+        require(!isRaffleOpen, "Raffle is already open");
+        isRaffleOpen = true;
+        totalTicketsSold = 0;
+        endTime = block.timestamp + timeoutDuration; // Set the end time for 3 minutes later
+        nextRaffleStartTime = 0; // Reset next raffle start time
+        emit RaffleOpened(ticketPriceInwSOL, maxTickets);
+    }
+
+    function buyTicket(uint256[] memory chosenNumbers) external raffleOpen nonReentrant {
+        require(chosenNumbers.length > 0, "Must choose at least one number");
+        require(chosenNumbers.length <= 50, "Exceeds maximum number of choices");
+
+        uint256 totalCost = ticketPriceInwSOL.mul(chosenNumbers.length);
+        require(wSOL.transferFrom(msg.sender, address(this), totalCost), "Payment transfer failed");
+
+        for (uint256 i = 0; i < chosenNumbers.length; i++) {
+            uint256 chosenNumber = chosenNumbers[i];
+            require(chosenNumber >= 1 && chosenNumber <= 50, "Invalid number chosen");
+            require(ticketsBought[msg.sender][chosenNumber] == 0, "Number already chosen");
+            ticketsBought[msg.sender][chosenNumber] = chosenNumber;
+        }
+
+        totalTicketsSold = totalTicketsSold.add(chosenNumbers.length);
+
+        emit TicketPurchased(msg.sender, chosenNumbers.length);
+
+        if (totalTicketsSold == maxTickets) {
+            closeRaffle();
+        }
+    }
+
+    function closeRaffle() public onlyOwner  {
+        require(isRaffleOpen, "Raffle is not open");
+        require(block.timestamp >= endTime || totalTicketsSold == maxTickets, "Raffle cannot be closed yet");
+
+        isRaffleOpen = false;
+        uint256 prizeAmount;
+        address winner2;
+
+        if (totalTicketsSold > 0) {
+            winner = random() % totalTicketsSold + 1;
+            winner2 = getParticipantAddress(winner);
+            //emit WinnerSelected(winner2);
+
+            // Calculate prize (half of the total balance)
+            prizeAmount = wSOL.balanceOf(address(this)).div(2);
+
+            require(wSOL.transfer(winner2, prizeAmount), "Prize transfer failed");
+            emit WinnerSelected(winner, prizeAmount);
+
+            // Transfer remaining balance to owner
+            uint256 remainingBalance = wSOL.balanceOf(address(this));
+            require(wSOL.transfer(owner, remainingBalance), "Remaining transfer failed");
+        }
+
+        emit RaffleClosed(winner);
+
+        // Reset for the next raffle
+        totalTicketsSold = 0;
+        nextRaffleStartTime = block.timestamp + timeoutDuration;
+    }
+
+    function random() internal view returns (uint256) {
+        return uint256(keccak256(abi.encodePacked(block.number, block.timestamp))) % totalTicketsSold;
+    }
+
+    function getParticipantAddress(uint256 ticketNumber) public view returns (address) {
+        require(ticketNumber > 0 && ticketNumber <= totalTicketsSold, "Invalid ticket number");
+
+        uint256 count = 0;
+        address participant;
+
+        // Iterate through the ticketsBought mapping to find the participant holding the ticket
+        for (uint256 i = 1; i <= 50; i++) {
+            if (ticketsBought[participant][i] != 0) {
+                count++;
+                if (count == ticketNumber) {
+                    return participant;
+                }
+            }
+        }
+
+        revert("Participant not found for the given ticket number");
+    }
+
+    function shutdownRaffle() external onlyOwner {
+        require(isRaffleOpen, "Raffle is not open");
+        isRaffleOpen = false;
+    }
+}
