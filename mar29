@@ -1,4 +1,3 @@
-
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
@@ -23,18 +22,22 @@ contract Raffle is ReentrancyGuard {
 
     mapping(address => uint256) public ticketsBought;
 
+    //Change (M): Get rid of participant lookup function. Map participants to winning addresses.
+    mapping (uint256 => address) public ticketHolder;
+
     event TicketPurchased(address buyer, uint256 amount);
     event RaffleOpened(uint256 ticketPriceInSol, uint256 maxTickets);
     event RaffleClosed(uint256 winner);
     event WinnerSelected(uint winner, uint prizeAmount);
 
-    constructor(address _wSOL, uint256 _ticketPriceInwSOL, uint256 _maxTickets) {
+    //Change (M): Remove max tickets from constructor, cap the tickets at 50
+    constructor(address _wSOL, uint256 _ticketPriceInwSOL) {
         require(_wSOL != address(0), "Invalid wSOL address");
 
         owner = msg.sender;
         wSOL = IERC20(_wSOL);
         ticketPriceInwSOL = _ticketPriceInwSOL;
-        maxTickets = _maxTickets;
+        maxTickets = 50; //Ticket Cap
         isRaffleOpen = false;
     }
 
@@ -65,17 +68,21 @@ contract Raffle is ReentrancyGuard {
         emit RaffleOpened(ticketPriceInwSOL, maxTickets);
     }
 
+    //Change (M): Tickets are sequential at time of purchase
     function buyTicket() external raffleOpen nonReentrant {
         require(totalTicketsSold < maxTickets, "Maximum tickets sold");
 
-        uint256 randomTicketNumber = generateRandomNumber();
-        require(randomTicketNumber >= 1 && randomTicketNumber <= 50, "Invalid random number generated");
+        uint256 ticketNumber = 1;
+        require(ticketNumber >= 1 && ticketNumber <= 50, "Invalid random number generated");
         require(ticketsBought[msg.sender] == 0, "Already purchased a ticket");
 
         uint256 totalCost = ticketPriceInwSOL;
         require(wSOL.transferFrom(msg.sender, address(this), totalCost), "Payment transfer failed");
 
-        ticketsBought[msg.sender] = randomTicketNumber;
+        ticketsBought[msg.sender] = ticketNumber;
+        ticketHolder[ticketNumber] = msg.sender; 
+
+        ticketNumber = ticketNumber.add(1);
 
         totalTicketsSold = totalTicketsSold.add(1);
 
@@ -87,9 +94,19 @@ contract Raffle is ReentrancyGuard {
         }
     }
 
+    function startRaffleInternal() internal {
+    require(!isRaffleOpen && block.timestamp >= nextRaffleStartTime, "Raffle cannot be started yet or already open");
+    isRaffleOpen = true; // Directly set isRaffleOpen to true
+    endTime = block.timestamp + timeoutDuration; // Set the end time for 3 minutes later
+    totalTicketsSold = 0; // Reset total tickets sold
+    emit RaffleOpened(ticketPriceInwSOL, maxTickets);
+}
+
+
     function closeRaffle() public onlyOwner {
         require(isRaffleOpen, "Raffle is not open");
         require(block.timestamp >= endTime || totalTicketsSold == maxTickets, "Raffle cannot be closed yet");
+        require(totalTicketsSold > 0, "Need sales to close raffle"); //Change (M) function won't complete unless at least one ticket bought
 
         isRaffleOpen = false;
 
@@ -98,20 +115,42 @@ contract Raffle is ReentrancyGuard {
             emit WinnerSelected(winner, 0); // Prize amount is not relevant for random selection
         }
 
+        //Change (M) Pay the winner:
+        redeem();
+
         emit RaffleClosed(winner);
 
         // Reset for the next raffle
         totalTicketsSold = 0;
         nextRaffleStartTime = block.timestamp + timeoutDuration;
 
-        // Automatically start the next raffle if the conditions are met
+        // Automatically start the next raffle if the conditions are met (Goo's contribution)
         if (nextRaffleStartTime <= block.timestamp) {
-            startRaffle();
+            startRaffleInternal();
         }
     }
 
+    function redeem() internal {
+        //require(winner != 0, "There must be a winner.");
+
+        uint prizeAmount; 
+        address winner2 = ticketHolder[winner]; //Change (M) direct lookup of winner
+
+        // Calculate prize (half of the total balance)
+        prizeAmount = wSOL.balanceOf(address(this)).div(2);
+
+        require(wSOL.transfer(winner2, prizeAmount), "Prize transfer failed");
+            emit WinnerSelected(winner, prizeAmount);
+
+        // Transfer remaining balance to owner
+        uint256 remainingBalance = wSOL.balanceOf(address(this));
+        require(wSOL.transfer(owner, remainingBalance), "Remaining transfer failed");
+        
+    }
+
+    //Change (M) Random is now between 0 and totalTicketsSold, so there is always a winner
     function generateRandomNumber() internal view returns (uint256) {
-        return uint256(keccak256(abi.encodePacked(block.timestamp, block.difficulty, totalTicketsSold))) % 50 + 1;
+        return uint256(keccak256(abi.encodePacked(block.timestamp, block.difficulty, totalTicketsSold))) % totalTicketsSold;
     }
 
     function shutdownRaffle() external onlyOwner {
