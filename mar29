@@ -16,6 +16,7 @@ contract Raffle is ReentrancyGuard {
     bool public isRaffleOpen;
     uint256 public endTime;
     uint256 public winner;
+    uint256 ticketNumber = 1;
 
     uint256 public nextRaffleStartTime; // Added variable for next raffle start time
     uint256 public timeoutDuration = 3 minutes; // Added timeout duration between raffles
@@ -72,7 +73,7 @@ contract Raffle is ReentrancyGuard {
     function buyTicket() external raffleOpen nonReentrant {
         require(totalTicketsSold < maxTickets, "Maximum tickets sold");
 
-        uint256 ticketNumber = 1;
+       
         require(ticketNumber >= 1 && ticketNumber <= 50, "Invalid random number generated");
         require(ticketsBought[msg.sender] == 0, "Already purchased a ticket");
 
@@ -118,6 +119,9 @@ contract Raffle is ReentrancyGuard {
         //Change (M) Pay the winner:
         redeem();
 
+        //Change (M) Reset the ticket number
+        ticketNumber = 1;
+
         emit RaffleClosed(winner);
 
         // Reset for the next raffle
@@ -150,7 +154,7 @@ contract Raffle is ReentrancyGuard {
 
     //Change (M) Random is now between 0 and totalTicketsSold, so there is always a winner
     function generateRandomNumber() internal view returns (uint256) {
-        return uint256(keccak256(abi.encodePacked(block.timestamp, block.difficulty, totalTicketsSold))) % totalTicketsSold;
+        return (uint256(keccak256(abi.encodePacked(block.timestamp, block.difficulty, totalTicketsSold))) % totalTicketsSold) + 1;
     }
 
     function shutdownRaffle() external onlyOwner {
